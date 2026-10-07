@@ -223,8 +223,26 @@ impl Barometer {
 
     // ── Views ────────────────────────────────────────────────────────────
 
+    /// How to lay out for the room the window gives. gpui has no zoom, so
+    /// a maximized window gets a second column and bigger readouts instead.
+    fn layout(window: &Window) -> Layout {
+        let vp = window.viewport_size();
+        // Title bar, status bar, padding and the panel's header.
+        let w = f32::from(vp.width) - 2. * f32::from(space::ROW) - 16.;
+        let h = f32::from(vp.height) - f32::from(chrome::TITLE_BAR_HEIGHT) - 24. - 2. * f32::from(space::ROW) - 48.;
+        let wide = w >= 1300. && h >= 560.;
+        Layout {
+            wide,
+            gauge_cells: if wide { 28 } else { 20 },
+            heat_cell: if wide { (w / 2. / 40.).clamp(14., 22.).floor() } else { 14. },
+            // Wide: the chart takes the right column's height under its rule
+            // and the rain strip. Narrow: whatever is left under the rest.
+            chart_h: if wide { (h - 150.).max(150.) } else { (h - 640.).clamp(150., 320.) },
+        }
+    }
+
     /// The big number and what it means.
-    fn headline(&self, window: &mut Window, cx: &App) -> impl IntoElement + use<> {
+    fn headline(&self, scale: Scale, window: &mut Window, cx: &App) -> impl IntoElement + use<> {
         let p = palette(cx);
         let f = &self.forecast;
         let u = f.units;
@@ -234,8 +252,10 @@ impl Barometer {
                 .flex()
                 .flex_row()
                 .gap_2()
-                .child(div().w(px(84.)).display(Scale::X1, window).text_color(hsla(p.fg_dim)).child(label.to_uppercase()))
-                .child(div().display(Scale::X1, window).text_color(hsla(p.fg)).child(value.to_uppercase()))
+                // Sized in font cells, not px: the face snaps to whole device
+                // pixels, so at 150% "PRESSURE" is wider than 8 × 8px.
+                .child(div().flex_none().w(cells(9. * scale as u32 as f32, window)).whitespace_nowrap().display(scale, window).text_color(hsla(p.fg_dim)).child(label.to_uppercase()))
+                .child(div().whitespace_nowrap().display(scale, window).text_color(hsla(p.fg)).child(value.to_uppercase()))
         };
         let mut readings = vec![
             line("feels", format!("{}{}", whole(f.feels), u.temp())),
@@ -251,13 +271,13 @@ impl Barometer {
             .flex_col()
             .gap_3()
             .min_w_0()
-            .child(banner("temp", format!("{}{}", whole(f.temp), u.temp())).shadow())
-            .child(div().display(Scale::X1, window).text_color(hsla(p.fg)).child(f.description().to_uppercase()))
+            .child(banner("temp", format!("{}{}", whole(f.temp), u.temp())).scale(scale).shadow())
+            .child(div().display(scale, window).text_color(hsla(p.fg)).child(f.description().to_uppercase()))
             .child(div().flex().flex_col().gap_1().children(readings))
     }
 
     /// The percentages, as gauges.
-    fn gauges(&self) -> impl IntoElement + use<> {
+    fn gauges(&self, cells: usize) -> impl IntoElement + use<> {
         let f = &self.forecast;
         let chance = f.next(1).first().map(|h| h.chance).unwrap_or(0.);
         let wind = (f.wind / f.units.wind_max()).clamp(0., 1.);
@@ -266,15 +286,15 @@ impl Barometer {
             .flex_col()
             .gap_2()
             .flex_none()
-            .child(ascii_gauge(f.humidity / 100.).label("humid").cells(20))
-            .child(ascii_gauge(f.cloud / 100.).label("cloud").cells(20))
-            .child(ascii_gauge(chance / 100.).label("rain").cells(20))
-            .child(ascii_gauge(wind).label("gale").cells(20))
-            .child(ascii_gauge(f.daylight().unwrap_or(0.)).label("day").cells(20))
+            .child(ascii_gauge(f.humidity / 100.).label("humid").cells(cells))
+            .child(ascii_gauge(f.cloud / 100.).label("cloud").cells(cells))
+            .child(ascii_gauge(chance / 100.).label("rain").cells(cells))
+            .child(ascii_gauge(wind).label("gale").cells(cells))
+            .child(ascii_gauge(f.daylight().unwrap_or(0.)).label("day").cells(cells))
     }
 
     /// The next 24 hours: temperature, and rain as texture underneath.
-    fn next_day(&self, cx: &App) -> impl IntoElement + use<> {
+    fn next_day(&self, chart_h: f32, cx: &App) -> impl IntoElement + use<> {
         let p = palette(cx);
         let f = &self.forecast;
         let u = f.units;
@@ -287,7 +307,7 @@ impl Barometer {
             .flex()
             .flex_col()
             .gap_1()
-            .child(line_chart("next-24", temps).labels(labels).height(px(150.)).format(move |v| format!("{}{unit}", whole(v))))
+            .child(line_chart("next-24", temps).labels(labels).height(px(chart_h)).format(move |v| format!("{}{unit}", whole(v))))
             .child(
                 div()
                     .h(px(36.))
@@ -300,7 +320,7 @@ impl Barometer {
     }
 
     /// The week: a 7×24 heatmap of temperature, and a line per day.
-    fn week(&self, window: &mut Window, cx: &App) -> impl IntoElement + use<> {
+    fn week(&self, heat_cell: f32, window: &mut Window, cx: &App) -> impl IntoElement + use<> {
         let p = palette(cx);
         let f = &self.forecast;
         let u = f.units;
@@ -318,13 +338,14 @@ impl Barometer {
                     .flex()
                     .flex_row()
                     .gap_3()
-                    .h(px(14.))
+                    .h(px(heat_cell))
                     .items_center()
+                    .whitespace_nowrap()
                     .display(Scale::X1, window)
-                    .child(div().w(px(36.)).text_color(hsla(p.fg_dim)).child(name.clone()))
-                    .child(div().w(px(96.)).text_color(hsla(p.fg)).child(format!("{:>3} {:>3}{}", whole(d.high), whole(d.low), u.temp())))
-                    .child(div().w(px(72.)).text_color(hsla(p.fg_dim)).child(if d.rain > 0.05 { format!("{:.1}{}", d.rain, u.rain()).to_uppercase() } else { "DRY".into() }))
-                    .child(div().body(text::SM).text_color(hsla(p.fg_dim)).child(forecast::describe(d.code)))
+                    .child(div().flex_none().w(cells(4., window)).text_color(hsla(p.fg_dim)).child(name.clone()))
+                    .child(div().flex_none().w(cells(10., window)).text_color(hsla(p.fg)).child(format!("{:>3} {:>3}{}", whole(d.high), whole(d.low), u.temp())))
+                    .child(div().flex_none().w(cells(8., window)).text_color(hsla(p.fg_dim)).child(if d.rain > 0.05 { format!("{:.1}{}", d.rain, u.rain()).to_uppercase() } else { "DRY".into() }))
+                    .child(div().min_w_0().overflow_hidden().text_ellipsis().body(text::SM).text_color(hsla(p.fg_dim)).child(forecast::describe(d.code)))
             })
             .collect();
         div()
@@ -332,8 +353,8 @@ impl Barometer {
             .flex_row()
             .gap_6()
             .items_start()
-            .child(heatmap(f.week_grid()).row_labels(names.clone()).cell(px(14.)))
-            .child(div().flex().flex_col().gap(px(4.)).children(rows))
+            .child(heatmap(f.week_grid()).row_labels(names.clone()).cell(px(heat_cell)))
+            .child(div().flex().flex_col().min_w_0().gap(px(4.)).children(rows))
     }
 
     fn settings_drawer(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -411,17 +432,36 @@ impl Render for Barometer {
             Feed::Demo => "demo week".into(),
         };
 
+        let layout = Self::layout(window);
+        let now = div()
+            .flex()
+            .flex_row()
+            .justify_between()
+            .items_start()
+            .gap_6()
+            .child(self.headline(if layout.wide { Scale::X2 } else { Scale::X1 }, window, cx))
+            .child(self.gauges(layout.gauge_cells));
+        let next = div().flex().flex_col().gap_4().child(rule(Some("next 24 hours"), window, cx)).child(self.next_day(layout.chart_h, cx));
+        let week = div().flex().flex_col().gap_4().child(rule(Some("the week"), window, cx)).child(self.week(layout.heat_cell, window, cx));
+        let body = if layout.wide {
+            div()
+                .flex()
+                .flex_row()
+                .gap_6()
+                .child(div().flex().flex_col().gap_4().flex_1().min_w_0().child(now).child(week))
+                .child(div().flex_1().min_w_0().child(next))
+        } else {
+            div().flex().flex_col().gap_4().child(now).child(next).child(week)
+        };
+        // Scrolls rather than clips when the window is shorter than this.
         let station = panel("Station").meta(meta).flex_1().min_h_0().child(
+            scroll_area("station-scroll").flex_1().min_h_0().child(
             div()
                 .flex()
                 .flex_col()
                 .gap_4()
                 .p_2()
-                .child(div().flex().flex_row().justify_between().items_start().gap_6().child(self.headline(window, cx)).child(self.gauges()))
-                .child(rule(Some("next 24 hours"), window, cx))
-                .child(self.next_day(cx))
-                .child(rule(Some("the week"), window, cx))
-                .child(self.week(window, cx))
+                .child(body)
                 .when_some(self.note.clone(), |col, note| {
                     col.child(
                         div()
@@ -435,6 +475,7 @@ impl Render for Barometer {
                             .child(note),
                     )
                 }),
+            ),
         );
 
         let gear = Button::new("open-settings").icon(Icon::Sliders).ghost().small().tooltip("Settings · Ctrl+,").on_click(cx.listener(
@@ -481,6 +522,20 @@ impl Render for Barometer {
     }
 }
 
+/// What the window has room for (see `Barometer::layout`).
+struct Layout {
+    /// Two columns: now and the week left, the next 24 hours right.
+    wide: bool,
+    gauge_cells: usize,
+    heat_cell: f32,
+    chart_h: f32,
+}
+
+/// `n` display-face cells at `Scale::X1`, on this window's display.
+fn cells(n: f32, window: &Window) -> gpui::Pixels {
+    display_size(Scale::X1, window) / 2. * n
+}
+
 gpui::actions!(barometer, [OpenSettings, Refresh]);
 
 fn main() {
@@ -491,9 +546,10 @@ fn main() {
             KeyBinding::new("ctrl-,", OpenSettings, None),
             KeyBinding::new("ctrl-r", Refresh, None),
         ]);
-        let options = chrome::window_options("Barometer", size(px(1040.), px(860.)), cx);
+        let options = chrome::remembered_window_options("barometer", "Barometer", size(px(1040.), px(860.)), cx);
         cx.open_window(options, |window, cx| {
             chrome::square_corners(window);
+            chrome::remember_window("barometer", window, cx);
             chrome::power_off_on_close(window, cx);
             cx.new(|cx| Barometer::new(window, cx))
         })
