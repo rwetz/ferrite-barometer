@@ -1,6 +1,6 @@
 [package]
 name = "ferrite-barometer"
-version = "0.2.1"
+version = "0.2.2"
 description = "A Ferrite weather station: ASCII gauges, a 24-hour forecast chart, rain in dither and a heatmap of the week."
 authors = ["Ryan Wetzstein"]
 license = "Apache-2.0"
