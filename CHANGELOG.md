@@ -4,6 +4,13 @@ All notable changes to Barometer are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-10-09
+
+### Changed
+
+- Make every scheme selectable in Settings and restore saved appearance at launch.
+- Include current Ferrite layout, window memory, and overlay fixes.
+
 ## [0.2.0] - 2026-10-07
 
 ### Added
