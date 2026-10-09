@@ -97,10 +97,19 @@ impl Barometer {
             _location,
             _appearance: theme::follow_system(window),
         };
+        // Shared launch defaults apply until this app has saved its own preferences.
         station.apply_look(window, cx);
-        // Lodestone hands over its shared look as FERRITE_* variables; when
-        // launched that way, those win over the saved settings.
         theme::apply_env(cx);
+        if Settings::path().is_some_and(|path| path.exists()) {
+            station.apply_look(window, cx);
+        } else {
+            station.settings.scheme = theme::scheme(cx).key.into();
+            station.settings.appearance = match theme::appearance(cx) {
+                Appearance::Light => "light", Appearance::System => "system", Appearance::Dark => "dark",
+            }.into();
+            station.settings.fps = motion::fps();
+            station.apply_look(window, cx);
+        }
         station.set_commands(cx);
         station.restart(cx);
         if first_run {
@@ -339,7 +348,7 @@ impl Barometer {
     fn settings_drawer(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let p = palette(cx);
         let s = &self.settings;
-        let scheme_index = SCHEMES.iter().position(|sc| sc.key == s.scheme);
+
         let close = {
             let weak = cx.weak_entity();
             move |_: &mut Window, cx: &mut App| {
@@ -376,15 +385,12 @@ impl Barometer {
                 ),
             )
             .child(rule(Some("look"), window, cx))
-            .child(
-                field("scheme", "Scheme").child(
-                    select("scheme-select")
-                        .options(SCHEMES.iter().map(|sc| sc.name))
-                        .selected(scheme_index)
-                        .width(px(220.))
-                        .on_change(cx.listener(|this, i: &usize, window, cx| this.change(|s| s.scheme = SCHEMES[*i].key.into(), window, cx))),
-                ),
-            )
+            .child(rule(Some("scheme"), window, cx))
+            .children(SCHEMES.iter().map(|scheme| {
+                Button::new(gpui::ElementId::Name(format!("settings-scheme-{}", scheme.key).into())).label(scheme.name).secondary()
+                    .selected(s.scheme == scheme.key)
+                    .on_click(cx.listener(move |this, _, window, cx| this.change(|s| s.scheme = scheme.key.into(), window, cx)))
+            }))
             .child(
                 field("appearance", "Appearance").child(
                     APPEARANCES.iter().fold(segmented("appearance-seg"), |seg, (_, label)| seg.option(*label))

@@ -108,7 +108,7 @@ units = metric        # metric | imperial
 | `BAROMETER_LOCATION` | Used when no location is set in Settings. |
 | `--demo` | Shows the demo week and doesn't touch the network. |
 | `--settings` | Starts with Settings open. |
-| `FERRITE_*` | The shared look from [Lodestone](https://github.com/rwetz/ferrite-lodestone); wins over the saved scheme and appearance. |
+| `FERRITE_*` | The shared look from [Lodestone](https://github.com/rwetz/ferrite-lodestone); provides defaults until the app saves its own preferences. |
 
 ## With Lodestone
 
