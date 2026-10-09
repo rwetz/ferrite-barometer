@@ -4,6 +4,24 @@ All notable changes to Barometer are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-10-07
+
+### Added
+
+- Maximized or fullscreen, the station goes to two columns: now and the
+  week on the left, the next 24 hours on the right with the chart as tall
+  as the window. Gauges and the week's heatmap grow with it.
+- The window reopens at the size, place and state it was closed in.
+
+### Fixed
+
+- "PRESSURE" no longer wraps onto two lines at 125–150% display scaling:
+  label columns are measured in font cells, not pixels.
+- The first window fits the screen, and a window shorter than the station
+  scrolls instead of cutting off the bottom.
+- The scheme picker in Settings opens (its menu was drawn under the
+  drawer; fixed in ferrite-design).
+
 ## [0.1.1] - 2026-10-07
 
 ### Fixed
