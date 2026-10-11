@@ -1570,6 +1570,7 @@ version = "0.2.1"
 dependencies = [
  "chrono",
  "ferrite-design",
+ "futures",
  "gpui-pre",
  "gpui-pre-platform",
  "serde_json",

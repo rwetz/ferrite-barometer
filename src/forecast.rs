@@ -65,7 +65,8 @@ impl Location {
         if let Some((a, b)) = s.split_once(',')
             && let (Ok(lat), Ok(lon)) = (a.trim().parse::<f64>(), b.trim().parse::<f64>())
         {
-            return ((-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon)).then_some(Location::Coords(lat, lon));
+            return ((-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon))
+                .then_some(Location::Coords(lat, lon));
         }
         Some(Location::Place(s.to_string()))
     }
@@ -127,7 +128,10 @@ impl Forecast {
     /// The index of the current hour in `hours`.
     pub fn now_index(&self) -> usize {
         let hour = &self.time[..self.time.len().min(13)];
-        self.hours.iter().position(|h| h.time.starts_with(hour)).unwrap_or(0)
+        self.hours
+            .iter()
+            .position(|h| h.time.starts_with(hour))
+            .unwrap_or(0)
     }
 
     /// The next `n` hours from now.
@@ -140,10 +144,21 @@ impl Forecast {
     /// week's own range, for the heatmap. Missing hours read as 0.
     pub fn week_grid(&self) -> Vec<Vec<f32>> {
         let temps: Vec<f32> = self.hours.iter().map(|h| h.temp).collect();
-        let (lo, hi) = temps.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &t| (lo.min(t), hi.max(t)));
+        let (lo, hi) = temps
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), &t| (lo.min(t), hi.max(t)));
         let span = (hi - lo).max(1.);
         (0..7)
-            .map(|d| (0..24).map(|h| temps.get(d * 24 + h).map(|t| ((t - lo) / span).clamp(0.02, 1.)).unwrap_or(0.)).collect())
+            .map(|d| {
+                (0..24)
+                    .map(|h| {
+                        temps
+                            .get(d * 24 + h)
+                            .map(|t| ((t - lo) / span).clamp(0.02, 1.))
+                            .unwrap_or(0.)
+                    })
+                    .collect()
+            })
             .collect()
     }
 
@@ -151,7 +166,11 @@ impl Forecast {
     /// sunrise, 1 after sunset).
     pub fn daylight(&self) -> Option<f32> {
         let day = self.days.first()?;
-        let (rise, set, now) = (minutes(&day.sunrise)?, minutes(&day.sunset)?, minutes(&self.time)?);
+        let (rise, set, now) = (
+            minutes(&day.sunrise)?,
+            minutes(&day.sunset)?,
+            minutes(&self.time)?,
+        );
         (set > rise).then(|| ((now - rise) as f32 / (set - rise) as f32).clamp(0., 1.))
     }
 
@@ -169,7 +188,9 @@ pub fn minutes(iso: &str) -> Option<i32> {
 
 /// `HH:MM` of an ISO local time.
 pub fn clock(iso: &str) -> &str {
-    iso.split_once('T').map(|(_, t)| t.get(..5).unwrap_or(t)).unwrap_or(iso)
+    iso.split_once('T')
+        .map(|(_, t)| t.get(..5).unwrap_or(t))
+        .unwrap_or(iso)
 }
 
 /// WMO weather interpretation codes, as Open-Meteo reports them.
@@ -214,24 +235,46 @@ fn num(v: &Value) -> f32 {
 }
 
 fn nums(v: &Value, key: &str) -> Vec<f32> {
-    v[key].as_array().map(|a| a.iter().map(num).collect()).unwrap_or_default()
+    v[key]
+        .as_array()
+        .map(|a| a.iter().map(num).collect())
+        .unwrap_or_default()
 }
 
 fn strs(v: &Value, key: &str) -> Vec<String> {
-    v[key].as_array().map(|a| a.iter().map(|s| s.as_str().unwrap_or_default().to_string()).collect()).unwrap_or_default()
+    v[key]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|s| s.as_str().unwrap_or_default().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Parse Open-Meteo's forecast response.
 pub fn parse(body: &str, place: &str, units: Units) -> Result<Forecast, String> {
-    let v: Value = serde_json::from_str(body).map_err(|_| "Open-Meteo sent something that isn't JSON".to_string())?;
+    let v: Value = serde_json::from_str(body)
+        .map_err(|_| "Open-Meteo sent something that isn't JSON".to_string())?;
     if v["error"].as_bool() == Some(true) {
-        return Err(format!("Open-Meteo: {}", v["reason"].as_str().unwrap_or("request refused")));
+        return Err(format!(
+            "Open-Meteo: {}",
+            v["reason"].as_str().unwrap_or("request refused")
+        ));
     }
     let c = &v["current"];
-    let time = c["time"].as_str().ok_or("Open-Meteo's response has no current reading")?.to_string();
+    let time = c["time"]
+        .as_str()
+        .ok_or("Open-Meteo's response has no current reading")?
+        .to_string();
 
     let h = &v["hourly"];
-    let (times, temps, chances, amounts) = (strs(h, "time"), nums(h, "temperature_2m"), nums(h, "precipitation_probability"), nums(h, "precipitation"));
+    let (times, temps, chances, amounts) = (
+        strs(h, "time"),
+        nums(h, "temperature_2m"),
+        nums(h, "precipitation_probability"),
+        nums(h, "precipitation"),
+    );
     let hours = times
         .into_iter()
         .enumerate()
@@ -286,32 +329,58 @@ pub fn parse(body: &str, place: &str, units: Units) -> Result<Forecast, String> 
 
 /// Parse Open-Meteo's geocoding response: the best match, or why there's none.
 pub fn parse_place(body: &str, query: &str) -> Result<Place, String> {
-    let v: Value = serde_json::from_str(body).map_err(|_| "the geocoder sent something that isn't JSON".to_string())?;
-    let r = v["results"].get(0).ok_or_else(|| format!("no place called \"{query}\""))?;
+    let v: Value = serde_json::from_str(body)
+        .map_err(|_| "the geocoder sent something that isn't JSON".to_string())?;
+    let r = v["results"]
+        .get(0)
+        .ok_or_else(|| format!("no place called \"{query}\""))?;
     let name = r["name"].as_str().unwrap_or(query);
     let name = match r["country_code"].as_str() {
         Some(cc) => format!("{name}, {cc}"),
         None => name.to_string(),
     };
-    Ok(Place { name, lat: r["latitude"].as_f64().ok_or("the geocoder gave no latitude")?, lon: r["longitude"].as_f64().ok_or("the geocoder gave no longitude")? })
+    Ok(Place {
+        name,
+        lat: r["latitude"]
+            .as_f64()
+            .ok_or("the geocoder gave no latitude")?,
+        lon: r["longitude"]
+            .as_f64()
+            .ok_or("the geocoder gave no longitude")?,
+    })
 }
 
 fn get(req: ureq::RequestBuilder<ureq::typestate::WithoutBody>) -> Result<String, String> {
-    let mut resp = req.call().map_err(|e| match e {
-        ureq::Error::StatusCode(code) => format!("Open-Meteo returned HTTP {code}"),
-        _ => "couldn't reach Open-Meteo".to_string(),
-    })?;
-    resp.body_mut().read_to_string().map_err(|_| "couldn't read Open-Meteo's response".to_string())
+    let mut resp = req
+        .config()
+        .timeout_global(Some(std::time::Duration::from_secs(20)))
+        .build()
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::StatusCode(code) => format!("Open-Meteo returned HTTP {code}"),
+            _ => "couldn't reach Open-Meteo".to_string(),
+        })?;
+    resp.body_mut()
+        .with_config()
+        .limit(1024 * 1024)
+        .read_to_string()
+        .map_err(|_| "couldn't read Open-Meteo's response".to_string())
 }
 
 /// Turn what the user typed into coordinates (a network call for a name).
 pub fn resolve(location: &Location) -> Result<Place, String> {
     match location {
-        Location::Coords(lat, lon) => Ok(Place { name: format!("{lat:.2}, {lon:.2}"), lat: *lat, lon: *lon }),
+        Location::Coords(lat, lon) => Ok(Place {
+            name: format!("{lat:.2}, {lon:.2}"),
+            lat: *lat,
+            lon: *lon,
+        }),
         Location::Place(q) => {
             // "Fargo, US" → search "Fargo"; the geocoder doesn't take a country suffix.
             let name = q.split(',').next().unwrap_or(q).trim();
-            let body = get(ureq::get("https://geocoding-api.open-meteo.com/v1/search").query("name", name).query("count", "1"))?;
+            let body = get(ureq::get("https://geocoding-api.open-meteo.com/v1/search")
+                .query("name", name)
+                .query("count", "1"))?;
             parse_place(&body, q)
         }
     }
@@ -330,7 +399,10 @@ pub fn fetch(place: &Place, units: Units) -> Result<Forecast, String> {
         .query("timezone", "auto")
         .query("forecast_days", "7");
     if units == Units::Imperial {
-        req = req.query("temperature_unit", "fahrenheit").query("wind_speed_unit", "mph").query("precipitation_unit", "inch");
+        req = req
+            .query("temperature_unit", "fahrenheit")
+            .query("wind_speed_unit", "mph")
+            .query("precipitation_unit", "inch");
     }
     parse(&get(req)?, &place.name, units)
 }
@@ -340,37 +412,70 @@ pub fn fetch(place: &Place, units: Units) -> Result<Forecast, String> {
 /// day five.
 pub fn demo(date: chrono::NaiveDate, hour: u32, units: Units) -> Forecast {
     use chrono::Duration;
-    let conv = |c: f32| if units == Units::Imperial { c * 9. / 5. + 32. } else { c };
+    let conv = |c: f32| {
+        if units == Units::Imperial {
+            c * 9. / 5. + 32.
+        } else {
+            c
+        }
+    };
     let rain_at = |i: usize| -> f32 {
         let i = i as f32;
-        let bump = |center: f32, width: f32, peak: f32| peak * (-((i - center) / width).powi(2)).exp();
+        let bump =
+            |center: f32, width: f32, peak: f32| peak * (-((i - center) / width).powi(2)).exp();
         bump(hour as f32 + 5., 2.5, 0.9) + bump(30., 4., 0.7) + bump(100., 5., 1.)
     };
     let hours: Vec<Hour> = (0..168)
         .map(|i| {
-            let t = 9. + 7. * (((i % 24) as f32 - 9.) / 24. * std::f32::consts::TAU).sin() - (i as f32 / 40.) + 3. * (i as f32 / 70.).cos();
+            let t = 9. + 7. * (((i % 24) as f32 - 9.) / 24. * std::f32::consts::TAU).sin()
+                - (i as f32 / 40.)
+                + 3. * (i as f32 / 70.).cos();
             let r = rain_at(i).min(1.);
             Hour {
-                time: format!("{}T{:02}:00", (date + Duration::days(i as i64 / 24)).format("%Y-%m-%d"), i % 24),
+                time: format!(
+                    "{}T{:02}:00",
+                    (date + Duration::days(i as i64 / 24)).format("%Y-%m-%d"),
+                    i % 24
+                ),
                 temp: conv(t),
                 chance: (r * 100.).round(),
-                amount: if r > 0.3 { (r - 0.3) * if units == Units::Imperial { 0.12 } else { 3. } } else { 0. },
+                amount: if r > 0.3 {
+                    (r - 0.3) * if units == Units::Imperial { 0.12 } else { 3. }
+                } else {
+                    0.
+                },
             }
         })
         .collect();
     let days = (0..7)
         .map(|d| {
             let day = &hours[d * 24..d * 24 + 24];
-            let (lo, hi) = day.iter().fold((f32::MAX, f32::MIN), |(lo, hi), h| (lo.min(h.temp), hi.max(h.temp)));
+            let (lo, hi) = day.iter().fold((f32::MAX, f32::MIN), |(lo, hi), h| {
+                (lo.min(h.temp), hi.max(h.temp))
+            });
             let rain: f32 = day.iter().map(|h| h.amount).sum();
             Day {
-                date: (date + Duration::days(d as i64)).format("%Y-%m-%d").to_string(),
+                date: (date + Duration::days(d as i64))
+                    .format("%Y-%m-%d")
+                    .to_string(),
                 high: hi,
                 low: lo,
                 rain,
-                code: if rain > 2. { 63 } else if rain > 0. { 61 } else { 2 },
-                sunrise: format!("{}T07:31", (date + Duration::days(d as i64)).format("%Y-%m-%d")),
-                sunset: format!("{}T18:52", (date + Duration::days(d as i64)).format("%Y-%m-%d")),
+                code: if rain > 2. {
+                    63
+                } else if rain > 0. {
+                    61
+                } else {
+                    2
+                },
+                sunrise: format!(
+                    "{}T07:31",
+                    (date + Duration::days(d as i64)).format("%Y-%m-%d")
+                ),
+                sunset: format!(
+                    "{}T18:52",
+                    (date + Duration::days(d as i64)).format("%Y-%m-%d")
+                ),
             }
         })
         .collect();
@@ -425,13 +530,21 @@ mod tests {
         assert_eq!(f.now_index(), 2, "14:15 falls in the 14:00 hour");
         assert_eq!(f.next(10).len(), 2);
         let d = f.daylight().unwrap();
-        assert!(d > 0.5 && d < 0.7, "14:15 is past the middle of 07:38–19:01: {d}");
+        assert!(
+            d > 0.5 && d < 0.7,
+            "14:15 is past the middle of 07:38–19:01: {d}"
+        );
         assert_eq!(clock(&f.days[0].sunrise), "07:38");
     }
 
     #[test]
     fn reports_api_errors() {
-        let err = parse(r#"{"error": true, "reason": "Latitude must be in range"}"#, "x", Units::Metric).unwrap_err();
+        let err = parse(
+            r#"{"error": true, "reason": "Latitude must be in range"}"#,
+            "x",
+            Units::Metric,
+        )
+        .unwrap_err();
         assert!(err.contains("Latitude"));
         assert!(parse("<html>", "x", Units::Metric).is_err());
         assert!(parse("{}", "x", Units::Metric).is_err());
@@ -440,14 +553,31 @@ mod tests {
     #[test]
     fn parses_places() {
         let body = r#"{"results": [{"name": "Fargo", "latitude": 46.877, "longitude": -96.789, "country_code": "US"}]}"#;
-        assert_eq!(parse_place(body, "Fargo").unwrap(), Place { name: "Fargo, US".into(), lat: 46.877, lon: -96.789 });
-        assert!(parse_place(r#"{"generationtime_ms": 0.5}"#, "Nowhere").unwrap_err().contains("Nowhere"));
+        assert_eq!(
+            parse_place(body, "Fargo").unwrap(),
+            Place {
+                name: "Fargo, US".into(),
+                lat: 46.877,
+                lon: -96.789
+            }
+        );
+        assert!(
+            parse_place(r#"{"generationtime_ms": 0.5}"#, "Nowhere")
+                .unwrap_err()
+                .contains("Nowhere")
+        );
     }
 
     #[test]
     fn locations() {
-        assert_eq!(Location::parse(" 46.88, -96.79 "), Some(Location::Coords(46.88, -96.79)));
-        assert_eq!(Location::parse("Fargo, US"), Some(Location::Place("Fargo, US".into())));
+        assert_eq!(
+            Location::parse(" 46.88, -96.79 "),
+            Some(Location::Coords(46.88, -96.79))
+        );
+        assert_eq!(
+            Location::parse("Fargo, US"),
+            Some(Location::Place("Fargo, US".into()))
+        );
         assert_eq!(Location::parse("95,10"), None, "latitude out of range");
         assert_eq!(Location::parse("  "), None);
     }
@@ -464,12 +594,19 @@ mod tests {
 
     #[test]
     fn week_grid_is_seven_by_twenty_four() {
-        let f = demo(chrono::NaiveDate::from_ymd_opt(2026, 10, 7).unwrap(), 14, Units::Metric);
+        let f = demo(
+            chrono::NaiveDate::from_ymd_opt(2026, 10, 7).unwrap(),
+            14,
+            Units::Metric,
+        );
         let g = f.week_grid();
         assert_eq!(g.len(), 7);
         assert!(g.iter().all(|r| r.len() == 24));
         assert!(g.iter().flatten().all(|v| (0.0..=1.0).contains(v)));
-        assert!(g.iter().flatten().any(|v| *v == 1.), "the week's warmest hour is full");
+        assert!(
+            g.iter().flatten().any(|v| *v == 1.),
+            "the week's warmest hour is full"
+        );
         assert_eq!(f.days.len(), 7);
         assert_eq!(f.now_index(), 14);
     }

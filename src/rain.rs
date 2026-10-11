@@ -13,7 +13,9 @@ const HEIGHT: u32 = 40;
 pub fn intensity(hour: &Hour, heavy: f32) -> f32 {
     let chance = (hour.chance / 100.).clamp(0., 1.);
     let amount = (hour.amount / heavy).clamp(0., 1.);
-    (chance * 0.7 + amount * 0.3).max(if hour.amount > 0. { 0.25 } else { 0. }).clamp(0., 1.)
+    (chance * 0.7 + amount * 0.3)
+        .max(if hour.amount > 0. { 0.25 } else { 0. })
+        .clamp(0., 1.)
 }
 
 /// A cheap, stable per-column jitter so streaks don't line up.
@@ -30,7 +32,9 @@ pub fn picture(hours: &[Hour], heavy: f32) -> Picture {
     let levels = (0..HEIGHT)
         .flat_map(|y| (0..w).map(move |x| (x, y)))
         .map(|(x, y)| {
-            let Some(hour) = hours.get((x / BAND) as usize) else { return 0 };
+            let Some(hour) = hours.get((x / BAND) as usize) else {
+                return 0;
+            };
             let i = intensity(hour, heavy);
             if i <= 0. {
                 return 0;
@@ -50,12 +54,20 @@ mod tests {
     use super::*;
 
     fn hour(chance: f32, amount: f32) -> Hour {
-        Hour { time: String::new(), temp: 0., chance, amount }
+        Hour {
+            time: String::new(),
+            temp: 0.,
+            chance,
+            amount,
+        }
     }
 
     fn ink(p: &Picture) -> f32 {
         let (w, h) = p.size();
-        (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| p.sample((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32)).sum()
+        (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .map(|(x, y)| p.sample((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32))
+            .sum()
     }
 
     #[test]
@@ -79,6 +91,9 @@ mod tests {
 
     #[test]
     fn one_band_per_hour() {
-        assert_eq!(picture(&vec![hour(0., 0.); 24], 4.).size(), (24 * BAND, HEIGHT));
+        assert_eq!(
+            picture(&vec![hour(0., 0.); 24], 4.).size(),
+            (24 * BAND, HEIGHT)
+        );
     }
 }

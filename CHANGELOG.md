@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+- Air quality and pollen readings from Open-Meteo, with explicit missing-data states.
+- Bounded requests on dedicated worker threads and live-service smoke checks.
+
+
 All notable changes to Barometer are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).

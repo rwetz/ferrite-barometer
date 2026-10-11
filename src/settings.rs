@@ -18,7 +18,13 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { scheme: "phosphor".into(), appearance: "dark".into(), fps: 240, location: String::new(), units: Units::Metric }
+        Self {
+            scheme: "phosphor".into(),
+            appearance: "dark".into(),
+            fps: 240,
+            location: String::new(),
+            units: Units::Metric,
+        }
     }
 }
 
@@ -30,14 +36,22 @@ impl Settings {
             if line.starts_with('#') {
                 continue;
             }
-            let Some((k, v)) = line.split_once('=') else { continue };
+            let Some((k, v)) = line.split_once('=') else {
+                continue;
+            };
             let v = v.trim();
             match k.trim() {
                 "scheme" if !v.is_empty() => s.scheme = v.into(),
                 "appearance" if matches!(v, "dark" | "light" | "system") => s.appearance = v.into(),
                 "fps" => s.fps = v.parse().map(|f: u32| f.clamp(12, 240)).unwrap_or(s.fps),
                 "location" => s.location = v.into(),
-                "units" => s.units = if v == "imperial" { Units::Imperial } else { Units::Metric },
+                "units" => {
+                    s.units = if v == "imperial" {
+                        Units::Imperial
+                    } else {
+                        Units::Metric
+                    }
+                }
                 _ => {}
             }
         }
@@ -74,7 +88,10 @@ impl Settings {
     }
 
     pub fn load() -> Self {
-        Self::path().and_then(|p| std::fs::read_to_string(p).ok()).map(|s| Self::parse(&s)).unwrap_or_default()
+        Self::path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|s| Self::parse(&s))
+            .unwrap_or_default()
     }
 
     pub fn save(&self) -> Result<(), String> {
@@ -92,7 +109,13 @@ mod tests {
 
     #[test]
     fn round_trips() {
-        let s = Settings { scheme: "harbor".into(), appearance: "light".into(), fps: 25, location: "Fargo, US".into(), units: Units::Imperial };
+        let s = Settings {
+            scheme: "harbor".into(),
+            appearance: "light".into(),
+            fps: 25,
+            location: "Fargo, US".into(),
+            units: Units::Imperial,
+        };
         assert_eq!(Settings::parse(&s.serialize()), s);
     }
 
@@ -103,6 +126,12 @@ mod tests {
 
     #[test]
     fn junk_falls_back_to_defaults() {
-        assert_eq!(Settings::parse("appearance = purple\nfps = 9000\n# x = y\n"), Settings { fps: 240, ..Settings::default() });
+        assert_eq!(
+            Settings::parse("appearance = purple\nfps = 9000\n# x = y\n"),
+            Settings {
+                fps: 240,
+                ..Settings::default()
+            }
+        );
     }
 }

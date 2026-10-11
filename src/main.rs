@@ -12,17 +12,20 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod air;
 mod forecast;
+mod probe;
 mod rain;
 mod settings;
+mod worker;
 
 use std::time::Duration;
 
 use chrono::{Local, NaiveDate, Timelike};
 use ferrite_design::prelude::*;
 use gpui::{
-    App, AppContext as _, ClickEvent, Context, Entity, IntoElement, KeyBinding, Render, SharedString, Subscription, Task, Window, div, px,
-    size,
+    App, AppContext as _, ClickEvent, Context, Entity, IntoElement, KeyBinding, Render,
+    SharedString, Subscription, Task, Window, div, px, size,
 };
 
 use forecast::{Forecast, Location, Units, whole};
@@ -51,6 +54,8 @@ struct Barometer {
     /// Why the live feed isn't showing, when it was asked for.
     note: Option<String>,
     fetching: bool,
+    air: Option<air::Reading>,
+    air_note: String,
     /// The polling loop; replacing it cancels the old one.
     task: Option<Task<()>>,
     location: Entity<TextInput>,
@@ -69,7 +74,9 @@ impl Barometer {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let settings = Settings::load();
         let location = cx.new(|cx| {
-            let mut input = TextInput::new(window, cx).placeholder("Fargo, or 46.88,-96.79").prompt(">");
+            let mut input = TextInput::new(window, cx)
+                .placeholder("Fargo, or 46.88,-96.79")
+                .prompt(">");
             input.set_value(settings.location.clone(), cx);
             input
         });
@@ -90,6 +97,8 @@ impl Barometer {
             forecast: demo_now(units),
             note: None,
             fetching: false,
+            air: None,
+            air_note: "Set a location to load air quality".into(),
             task: None,
             location,
             palette: cx.new(|cx| CommandPalette::new(window, cx)),
@@ -105,8 +114,11 @@ impl Barometer {
         } else {
             station.settings.scheme = theme::scheme(cx).key.into();
             station.settings.appearance = match theme::appearance(cx) {
-                Appearance::Light => "light", Appearance::System => "system", Appearance::Dark => "dark",
-            }.into();
+                Appearance::Light => "light",
+                Appearance::System => "system",
+                Appearance::Dark => "dark",
+            }
+            .into();
             station.settings.fps = motion::fps();
             station.apply_look(window, cx);
         }
@@ -115,7 +127,9 @@ impl Barometer {
         if first_run {
             // Saving now is what makes this happen only once.
             station.save(cx);
-            station.location.update(cx, |input, cx| input.focus(window, cx));
+            station
+                .location
+                .update(cx, |input, cx| input.focus(window, cx));
         }
         station
     }
@@ -138,13 +152,20 @@ impl Barometer {
 
     fn save(&mut self, cx: &mut Context<Self>) {
         if let Err(err) = self.settings.save() {
-            self.toaster.update(cx, |t, cx| t.push(toast("Couldn't save settings").danger().message(err), cx));
+            self.toaster.update(cx, |t, cx| {
+                t.push(toast("Couldn't save settings").danger().message(err), cx)
+            });
         }
         cx.notify();
     }
 
     /// Change a setting, apply it, save it.
-    fn change(&mut self, f: impl FnOnce(&mut Settings), window: &mut Window, cx: &mut Context<Self>) {
+    fn change(
+        &mut self,
+        f: impl FnOnce(&mut Settings),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let before = self.settings.units;
         f(&mut self.settings);
         self.apply_look(window, cx);
@@ -163,42 +184,84 @@ impl Barometer {
             }
         };
         let mut commands = vec![
-            command("Refresh").group("Weather").icon(Icon::Refresh).shortcut("Ctrl+R").on_run(run(|this, _, cx| this.restart(cx))),
-            command("Settings").group("Weather").icon(Icon::Sliders).shortcut("Ctrl+,").on_run(run(|this, _, cx| {
-                this.settings_open = true;
-                cx.notify();
-            })),
-            command("Metric units").group("Weather").on_run(run(|this, window, cx| this.change(|s| s.units = Units::Metric, window, cx))),
-            command("Imperial units").group("Weather").on_run(run(|this, window, cx| this.change(|s| s.units = Units::Imperial, window, cx))),
-            command("Dark theme").group("Theme").on_run(run(|this, window, cx| this.change(|s| s.appearance = "dark".into(), window, cx))),
-            command("Light theme").group("Theme").on_run(run(|this, window, cx| this.change(|s| s.appearance = "light".into(), window, cx))),
+            command("Refresh")
+                .group("Weather")
+                .icon(Icon::Refresh)
+                .shortcut("Ctrl+R")
+                .on_run(run(|this, _, cx| this.restart(cx))),
+            command("Settings")
+                .group("Weather")
+                .icon(Icon::Sliders)
+                .shortcut("Ctrl+,")
+                .on_run(run(|this, _, cx| {
+                    this.settings_open = true;
+                    cx.notify();
+                })),
+            command("Metric units")
+                .group("Weather")
+                .on_run(run(|this, window, cx| {
+                    this.change(|s| s.units = Units::Metric, window, cx)
+                })),
+            command("Imperial units")
+                .group("Weather")
+                .on_run(run(|this, window, cx| {
+                    this.change(|s| s.units = Units::Imperial, window, cx)
+                })),
+            command("Dark theme")
+                .group("Theme")
+                .on_run(run(|this, window, cx| {
+                    this.change(|s| s.appearance = "dark".into(), window, cx)
+                })),
+            command("Light theme")
+                .group("Theme")
+                .on_run(run(|this, window, cx| {
+                    this.change(|s| s.appearance = "light".into(), window, cx)
+                })),
         ];
         for scheme in SCHEMES {
             let weak = weak.clone();
-            commands.push(command(format!("Scheme: {}", scheme.name)).group("Theme").on_run(move |window, cx| {
-                let _ = weak.update(cx, |this, cx| this.change(|s| s.scheme = scheme.key.into(), window, cx));
-            }));
+            commands.push(
+                command(format!("Scheme: {}", scheme.name))
+                    .group("Theme")
+                    .on_run(move |window, cx| {
+                        let _ = weak.update(cx, |this, cx| {
+                            this.change(|s| s.scheme = scheme.key.into(), window, cx)
+                        });
+                    }),
+            );
         }
-        self.palette.update(cx, |p, cx| p.set_commands(commands, cx));
+        self.palette
+            .update(cx, |p, cx| p.set_commands(commands, cx));
     }
 
     // ── The feed ─────────────────────────────────────────────────────────
 
     fn location(&self) -> Option<Location> {
-        Location::parse(&self.settings.location).or_else(|| std::env::var("BAROMETER_LOCATION").ok().and_then(|l| Location::parse(&l)))
+        Location::parse(&self.settings.location).or_else(|| {
+            std::env::var("BAROMETER_LOCATION")
+                .ok()
+                .and_then(|l| Location::parse(&l))
+        })
     }
 
     /// (Re)start polling with the current settings; falls back to the demo
     /// week when there's no place to ask about.
     fn restart(&mut self, cx: &mut Context<Self>) {
         self.task = None;
+        self.air = None;
+        self.air_note = "Loading air quality…".into();
         let units = self.settings.units;
-        let location = if std::env::args().any(|a| a == "--demo") { None } else { self.location() };
+        let location = if std::env::args().any(|a| a == "--demo") {
+            None
+        } else {
+            self.location()
+        };
         let Some(location) = location else {
             self.feed = Feed::Demo;
             self.forecast = demo_now(units);
             self.note = None;
             self.fetching = false;
+            self.air_note = "Set a location to load air quality".into();
             cx.notify();
             return;
         };
@@ -206,12 +269,24 @@ impl Barometer {
         self.task = Some(cx.spawn(async move |this, cx| {
             loop {
                 let loc = location.clone();
-                let result = cx.background_executor().spawn(async move { forecast::resolve(&loc).and_then(|place| forecast::fetch(&place, units)) }).await;
+                let result = worker::run(move || {
+                    let place = forecast::resolve(&loc)?;
+                    let weather = forecast::fetch(&place, units)?;
+                    Ok((weather, air::fetch(&place)))
+                })
+                .await;
                 let ok = result.is_ok();
                 let alive = this.update(cx, |this, cx| {
                     this.fetching = false;
                     match result {
-                        Ok(f) => {
+                        Ok((f, air)) => {
+                            match air {
+                                Ok(reading) => {
+                                    this.air_note = format!("Open-Meteo / CAMS · {}", reading.time);
+                                    this.air = Some(reading);
+                                }
+                                Err(error) => this.air_note = error,
+                            }
                             this.forecast = f;
                             this.feed = Feed::Live;
                             this.note = None;
@@ -224,7 +299,9 @@ impl Barometer {
                 if alive.is_err() {
                     break;
                 }
-                cx.background_executor().timer(if ok { EVERY } else { RETRY }).await;
+                cx.background_executor()
+                    .timer(if ok { EVERY } else { RETRY })
+                    .await;
             }
         }));
         cx.notify();
@@ -232,21 +309,69 @@ impl Barometer {
 
     // ── Views ────────────────────────────────────────────────────────────
 
+    fn air_panel(&self, cells: usize) -> gpui::AnyElement {
+        let mut content = div().flex().flex_col().gap_2().child(self.air_note.clone());
+        if let Some(a) = &self.air {
+            content = content.child(div().child(format!(
+                "US AQI {} · {}",
+                air::number(a.aqi),
+                air::category(a.aqi)
+            )));
+            if let Some(aqi) = a.aqi {
+                content = content.child(
+                    ascii_gauge((aqi / 300.).clamp(0., 1.))
+                        .label("AQI")
+                        .cells(cells),
+                );
+            }
+            content = content.child(div().child(format!(
+                "PM2.5 {} / PM10 {} µg/m³",
+                air::number(a.pm25),
+                air::number(a.pm10)
+            )));
+            for (name, value) in &a.pollen {
+                content = content
+                    .child(div().child(format!("{name}: {} grains/m³", air::number(*value))));
+            }
+            if a.pollen.iter().all(|(_, value)| value.is_none()) {
+                content =
+                    content.child("Pollen unavailable here. Coverage is European and seasonal.");
+            }
+            content =
+                content.child("Modelled air quality: Open-Meteo / CAMS ENSEMBLE & CAMS global.");
+        }
+        panel("Air quality & pollen")
+            .child(content)
+            .into_any_element()
+    }
+
     /// How to lay out for the room the window gives. gpui has no zoom, so
     /// a maximized window gets a second column and bigger readouts instead.
     fn layout(window: &Window) -> Layout {
         let vp = window.viewport_size();
         // Title bar, status bar, padding and the panel's header.
         let w = f32::from(vp.width) - 2. * f32::from(space::ROW) - 16.;
-        let h = f32::from(vp.height) - f32::from(chrome::TITLE_BAR_HEIGHT) - 24. - 2. * f32::from(space::ROW) - 48.;
+        let h = f32::from(vp.height)
+            - f32::from(chrome::TITLE_BAR_HEIGHT)
+            - 24.
+            - 2. * f32::from(space::ROW)
+            - 48.;
         let wide = w >= 1300. && h >= 560.;
         Layout {
             wide,
             gauge_cells: if wide { 28 } else { 20 },
-            heat_cell: if wide { (w / 2. / 40.).clamp(14., 22.).floor() } else { 14. },
+            heat_cell: if wide {
+                (w / 2. / 40.).clamp(14., 22.).floor()
+            } else {
+                14.
+            },
             // Wide: the chart takes the right column's height under its rule
             // and the rain strip. Narrow: whatever is left under the rest.
-            chart_h: if wide { (h - 150.).max(150.) } else { (h - 640.).clamp(150., 320.) },
+            chart_h: if wide {
+                (h - 150.).max(150.)
+            } else {
+                (h - 640.).clamp(150., 320.)
+            },
         }
     }
 
@@ -263,25 +388,69 @@ impl Barometer {
                 .gap_2()
                 // Sized in font cells, not px: the face snaps to whole device
                 // pixels, so at 150% "PRESSURE" is wider than 8 × 8px.
-                .child(div().flex_none().w(cells(9. * scale as u32 as f32, window)).whitespace_nowrap().display(scale, window).text_color(hsla(p.fg_dim)).child(label.to_uppercase()))
-                .child(div().whitespace_nowrap().display(scale, window).text_color(hsla(p.fg)).child(value.to_uppercase()))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(cells(9. * scale as u32 as f32, window))
+                        .whitespace_nowrap()
+                        .display(scale, window)
+                        .text_color(hsla(p.fg_dim))
+                        .child(label.to_uppercase()),
+                )
+                .child(
+                    div()
+                        .whitespace_nowrap()
+                        .display(scale, window)
+                        .text_color(hsla(p.fg))
+                        .child(value.to_uppercase()),
+                )
         };
         let mut readings = vec![
             line("feels", format!("{}{}", whole(f.feels), u.temp())),
-            line("wind", format!("{:.0} {} {}", f.wind, u.speed(), forecast::compass(f.wind_dir))),
+            line(
+                "wind",
+                format!(
+                    "{:.0} {} {}",
+                    f.wind,
+                    u.speed(),
+                    forecast::compass(f.wind_dir)
+                ),
+            ),
             line("pressure", format!("{:.0} hPa", f.pressure)),
         ];
         if let Some(d) = today {
-            readings.insert(1, line("hi / lo", format!("{} / {}{}", whole(d.high), whole(d.low), u.temp())));
-            readings.push(line("sun", format!("{} - {}", forecast::clock(&d.sunrise), forecast::clock(&d.sunset))));
+            readings.insert(
+                1,
+                line(
+                    "hi / lo",
+                    format!("{} / {}{}", whole(d.high), whole(d.low), u.temp()),
+                ),
+            );
+            readings.push(line(
+                "sun",
+                format!(
+                    "{} - {}",
+                    forecast::clock(&d.sunrise),
+                    forecast::clock(&d.sunset)
+                ),
+            ));
         }
         div()
             .flex()
             .flex_col()
             .gap_3()
             .min_w_0()
-            .child(banner("temp", format!("{}{}", whole(f.temp), u.temp())).scale(scale).shadow())
-            .child(div().display(scale, window).text_color(hsla(p.fg)).child(f.description().to_uppercase()))
+            .child(
+                banner("temp", format!("{}{}", whole(f.temp), u.temp()))
+                    .scale(scale)
+                    .shadow(),
+            )
+            .child(
+                div()
+                    .display(scale, window)
+                    .text_color(hsla(p.fg))
+                    .child(f.description().to_uppercase()),
+            )
             .child(div().flex().flex_col().gap_1().children(readings))
     }
 
@@ -299,7 +468,11 @@ impl Barometer {
             .child(ascii_gauge(f.cloud / 100.).label("cloud").cells(cells))
             .child(ascii_gauge(chance / 100.).label("rain").cells(cells))
             .child(ascii_gauge(wind).label("gale").cells(cells))
-            .child(ascii_gauge(f.daylight().unwrap_or(0.)).label("day").cells(cells))
+            .child(
+                ascii_gauge(f.daylight().unwrap_or(0.))
+                    .label("day")
+                    .cells(cells),
+            )
     }
 
     /// The next 24 hours: temperature, and rain as texture underneath.
@@ -309,14 +482,22 @@ impl Barometer {
         let u = f.units;
         let hours = f.next(24);
         let temps: Vec<f32> = hours.iter().map(|h| h.temp).collect();
-        let labels: Vec<String> = hours.iter().map(|h| format!("{} · rain {:.0}%", forecast::clock(&h.time), h.chance)).collect();
+        let labels: Vec<String> = hours
+            .iter()
+            .map(|h| format!("{} · rain {:.0}%", forecast::clock(&h.time), h.chance))
+            .collect();
         let heavy = if u == Units::Imperial { 0.16 } else { 4. };
         let unit = u.temp();
         div()
             .flex()
             .flex_col()
             .gap_1()
-            .child(line_chart("next-24", temps).labels(labels).height(px(chart_h)).format(move |v| format!("{}{unit}", whole(v))))
+            .child(
+                line_chart("next-24", temps)
+                    .labels(labels)
+                    .height(px(chart_h))
+                    .format(move |v| format!("{}{unit}", whole(v))),
+            )
             .child(
                 div()
                     .h(px(36.))
@@ -324,7 +505,11 @@ impl Barometer {
                     .border_1()
                     .border_color(hsla(p.line))
                     .bg(hsla(p.sunken))
-                    .child(dither(rain::picture(hours, heavy)).ink(hsla(p.fg_dim)).size_full()),
+                    .child(
+                        dither(rain::picture(hours, heavy))
+                            .ink(hsla(p.fg_dim))
+                            .size_full(),
+                    ),
             )
     }
 
@@ -336,7 +521,11 @@ impl Barometer {
         let names: Vec<String> = f
             .days
             .iter()
-            .map(|d| NaiveDate::parse_from_str(&d.date, "%Y-%m-%d").map(|d| d.format("%a").to_string().to_uppercase()).unwrap_or_default())
+            .map(|d| {
+                NaiveDate::parse_from_str(&d.date, "%Y-%m-%d")
+                    .map(|d| d.format("%a").to_string().to_uppercase())
+                    .unwrap_or_default()
+            })
             .collect();
         let rows: Vec<_> = f
             .days
@@ -351,10 +540,45 @@ impl Barometer {
                     .items_center()
                     .whitespace_nowrap()
                     .display(Scale::X1, window)
-                    .child(div().flex_none().w(cells(4., window)).text_color(hsla(p.fg_dim)).child(name.clone()))
-                    .child(div().flex_none().w(cells(10., window)).text_color(hsla(p.fg)).child(format!("{:>3} {:>3}{}", whole(d.high), whole(d.low), u.temp())))
-                    .child(div().flex_none().w(cells(8., window)).text_color(hsla(p.fg_dim)).child(if d.rain > 0.05 { format!("{:.1}{}", d.rain, u.rain()).to_uppercase() } else { "DRY".into() }))
-                    .child(div().min_w_0().overflow_hidden().text_ellipsis().body(text::SM).text_color(hsla(p.fg_dim)).child(forecast::describe(d.code)))
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(cells(4., window))
+                            .text_color(hsla(p.fg_dim))
+                            .child(name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(cells(10., window))
+                            .text_color(hsla(p.fg))
+                            .child(format!(
+                                "{:>3} {:>3}{}",
+                                whole(d.high),
+                                whole(d.low),
+                                u.temp()
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(cells(8., window))
+                            .text_color(hsla(p.fg_dim))
+                            .child(if d.rain > 0.05 {
+                                format!("{:.1}{}", d.rain, u.rain()).to_uppercase()
+                            } else {
+                                "DRY".into()
+                            }),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .body(text::SM)
+                            .text_color(hsla(p.fg_dim))
+                            .child(forecast::describe(d.code)),
+                    )
             })
             .collect();
         div()
@@ -362,11 +586,19 @@ impl Barometer {
             .flex_row()
             .gap_6()
             .items_start()
-            .child(heatmap(f.week_grid()).row_labels(names.clone()).cell(px(heat_cell)))
+            .child(
+                heatmap(f.week_grid())
+                    .row_labels(names.clone())
+                    .cell(px(heat_cell)),
+            )
             .child(div().flex().flex_col().min_w_0().gap(px(4.)).children(rows))
     }
 
-    fn settings_drawer(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn settings_drawer(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let p = palette(cx);
         let s = &self.settings;
 
@@ -382,8 +614,12 @@ impl Barometer {
         let status: SharedString = match (self.feed, &self.note, self.fetching) {
             (_, _, true) => "Fetching…".into(),
             (_, Some(note), _) => note.clone().into(),
-            (Feed::Live, None, _) => format!("Live: {} from Open-Meteo.", self.forecast.place).into(),
-            (Feed::Demo, None, _) => "Showing a made-up week. Enter a place below for the real weather.".into(),
+            (Feed::Live, None, _) => {
+                format!("Live: {} from Open-Meteo.", self.forecast.place).into()
+            }
+            (Feed::Demo, None, _) => {
+                "Showing a made-up week. Enter a place below for the real weather.".into()
+            }
         };
 
         drawer("settings")
@@ -392,8 +628,18 @@ impl Barometer {
             .width(px(420.))
             .on_close(close)
             .child(rule(Some("weather"), window, cx))
-            .child(div().body(text::SM).text_color(hsla(p.fg_dim)).child(status))
-            .child(field("location", "Location").hint("A town, or lat,lon · Enter to apply").stacked().child(self.location.clone()))
+            .child(
+                div()
+                    .body(text::SM)
+                    .text_color(hsla(p.fg_dim))
+                    .child(status),
+            )
+            .child(
+                field("location", "Location")
+                    .hint("A town, or lat,lon · Enter to apply")
+                    .stacked()
+                    .child(self.location.clone()),
+            )
             .child(
                 field("units", "Units").child(
                     segmented("units-seg")
@@ -401,30 +647,66 @@ impl Barometer {
                         .option("Imperial")
                         .selected(if s.units == Units::Imperial { 1 } else { 0 })
                         .on_select(cx.listener(|this, i: &usize, window, cx| {
-                            this.change(|s| s.units = if *i == 1 { Units::Imperial } else { Units::Metric }, window, cx)
+                            this.change(
+                                |s| {
+                                    s.units = if *i == 1 {
+                                        Units::Imperial
+                                    } else {
+                                        Units::Metric
+                                    }
+                                },
+                                window,
+                                cx,
+                            )
                         })),
                 ),
             )
             .child(rule(Some("look"), window, cx))
             .child(rule(Some("scheme"), window, cx))
             .children(SCHEMES.iter().map(|scheme| {
-                Button::new(gpui::ElementId::Name(format!("settings-scheme-{}", scheme.key).into())).label(scheme.name).secondary()
-                    .selected(s.scheme == scheme.key)
-                    .on_click(cx.listener(move |this, _, window, cx| this.change(|s| s.scheme = scheme.key.into(), window, cx)))
+                Button::new(gpui::ElementId::Name(
+                    format!("settings-scheme-{}", scheme.key).into(),
+                ))
+                .label(scheme.name)
+                .secondary()
+                .selected(s.scheme == scheme.key)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.change(|s| s.scheme = scheme.key.into(), window, cx)
+                }))
             }))
             .child(
                 field("appearance", "Appearance").child(
-                    APPEARANCES.iter().fold(segmented("appearance-seg"), |seg, (_, label)| seg.option(*label))
-                        .selected(APPEARANCES.iter().position(|(k, _)| *k == s.appearance).unwrap_or(0))
-                        .on_select(cx.listener(|this, i: &usize, window, cx| this.change(|s| s.appearance = APPEARANCES[*i].0.into(), window, cx))),
+                    APPEARANCES
+                        .iter()
+                        .fold(segmented("appearance-seg"), |seg, (_, label)| {
+                            seg.option(*label)
+                        })
+                        .selected(
+                            APPEARANCES
+                                .iter()
+                                .position(|(k, _)| *k == s.appearance)
+                                .unwrap_or(0),
+                        )
+                        .on_select(cx.listener(|this, i: &usize, window, cx| {
+                            this.change(|s| s.appearance = APPEARANCES[*i].0.into(), window, cx)
+                        })),
                 ),
             )
             .child(
-                field("fps", "Refresh rate").hint("25 is the classic stepped look").child(
-                    FPS.iter().fold(segmented("fps-seg"), |seg, f| seg.option(f.to_string()))
-                        .selected(FPS.iter().position(|f| *f == s.fps).unwrap_or(FPS.len() - 1))
-                        .on_select(cx.listener(|this, i: &usize, window, cx| this.change(|s| s.fps = FPS[*i], window, cx))),
-                ),
+                field("fps", "Refresh rate")
+                    .hint("25 is the classic stepped look")
+                    .child(
+                        FPS.iter()
+                            .fold(segmented("fps-seg"), |seg, f| seg.option(f.to_string()))
+                            .selected(
+                                FPS.iter()
+                                    .position(|f| *f == s.fps)
+                                    .unwrap_or(FPS.len() - 1),
+                            )
+                            .on_select(cx.listener(|this, i: &usize, window, cx| {
+                                this.change(|s| s.fps = FPS[*i], window, cx)
+                            })),
+                    ),
             )
     }
 }
@@ -432,6 +714,9 @@ impl Barometer {
 impl Render for Barometer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
+        if let Some(reading) = &self.air {
+            probe::record(format!("Air quality loaded: {}", air::number(reading.aqi)));
+        }
         let f = &self.forecast;
         let meta = match self.feed {
             Feed::Live => format!("{} · {}", f.place, forecast::clock(&f.time)),
@@ -447,49 +732,78 @@ impl Render for Barometer {
             .gap_6()
             .child(self.headline(if layout.wide { Scale::X2 } else { Scale::X1 }, window, cx))
             .child(self.gauges(layout.gauge_cells));
-        let next = div().flex().flex_col().gap_4().child(rule(Some("next 24 hours"), window, cx)).child(self.next_day(layout.chart_h, cx));
-        let week = div().flex().flex_col().gap_4().child(rule(Some("the week"), window, cx)).child(self.week(layout.heat_cell, window, cx));
+        let next = div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(rule(Some("next 24 hours"), window, cx))
+            .child(self.next_day(layout.chart_h, cx));
+        let week = div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(rule(Some("the week"), window, cx))
+            .child(self.week(layout.heat_cell, window, cx));
         let body = if layout.wide {
             div()
                 .flex()
                 .flex_row()
                 .gap_6()
-                .child(div().flex().flex_col().gap_4().flex_1().min_w_0().child(now).child(week))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_4()
+                        .flex_1()
+                        .min_w_0()
+                        .child(now)
+                        .child(week),
+                )
                 .child(div().flex_1().min_w_0().child(next))
         } else {
-            div().flex().flex_col().gap_4().child(now).child(next).child(week)
-        };
-        // Scrolls rather than clips when the window is shorter than this.
-        let station = panel("Station").meta(meta).flex_1().min_h_0().child(
-            scroll_area("station-scroll").flex_1().min_h_0().child(
             div()
                 .flex()
                 .flex_col()
                 .gap_4()
-                .p_2()
-                .child(body)
-                .when_some(self.note.clone(), |col, note| {
-                    col.child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_2()
-                            .body(text::SM)
-                            .text_color(hsla(p.fg_dim))
-                            .child(icon(Icon::Warning).fit(px(14.)).color(hsla(p.warning)))
-                            .child(note),
-                    )
-                }),
+                .child(now)
+                .child(next)
+                .child(week)
+        };
+        // Scrolls rather than clips when the window is shorter than this.
+        let station = panel("Station").meta(meta).flex_1().min_h_0().child(
+            scroll_area("station-scroll").flex_1().min_h_0().child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .p_2()
+                    .child(body)
+                    .child(self.air_panel(layout.gauge_cells))
+                    .when_some(self.note.clone(), |col, note| {
+                        col.child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap_2()
+                                .body(text::SM)
+                                .text_color(hsla(p.fg_dim))
+                                .child(icon(Icon::Warning).fit(px(14.)).color(hsla(p.warning)))
+                                .child(note),
+                        )
+                    }),
             ),
         );
 
-        let gear = Button::new("open-settings").icon(Icon::Sliders).ghost().small().tooltip("Settings · Ctrl+,").on_click(cx.listener(
-            |this, _: &ClickEvent, _, cx| {
+        let gear = Button::new("open-settings")
+            .icon(Icon::Sliders)
+            .ghost()
+            .small()
+            .tooltip("Settings · Ctrl+,")
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.settings_open = !this.settings_open;
                 cx.notify();
-            },
-        ));
+            }));
         let drawer = self.settings_drawer(window, cx);
         let feed = match (self.feed, self.fetching) {
             (_, true) => "FETCHING",
@@ -506,7 +820,9 @@ impl Render for Barometer {
                 .bg(hsla(p.bg))
                 .text_color(hsla(p.fg))
                 .body(text::BASE)
-                .on_action(cx.listener(|this, _: &TogglePalette, window, cx| this.palette.update(cx, |p, cx| p.toggle(window, cx))))
+                .on_action(cx.listener(|this, _: &TogglePalette, window, cx| {
+                    this.palette.update(cx, |p, cx| p.toggle(window, cx))
+                }))
                 .on_action(cx.listener(|this, _: &OpenSettings, _, cx| {
                     this.settings_open = true;
                     cx.notify();
@@ -515,7 +831,15 @@ impl Render for Barometer {
                 .child(self.palette.clone())
                 .child(self.toaster.clone())
                 .child(title_bar("Barometer").child(gear))
-                .child(div().flex().flex_col().flex_1().min_h_0().p(space::ROW).child(station))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h_0()
+                        .p(space::ROW)
+                        .child(station),
+                )
                 .child(drawer)
                 .child(
                     status_bar()
@@ -549,6 +873,22 @@ fn main() {
         println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
         return;
     }
+    if std::env::args().any(|arg| arg == "--smoke") {
+        let result = forecast::resolve(&Location::Coords(46.88, -96.79))
+            .and_then(|place| air::fetch(&place));
+        match result {
+            Ok(air) => println!(
+                "Air quality: AQI {} / PM2.5 {}",
+                air::number(air.aqi),
+                air::number(air.pm25)
+            ),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     gpui_platform::application().run(|cx: &mut App| {
         ferrite_design::init(Appearance::Dark, cx);
         cx.bind_keys([
@@ -556,7 +896,12 @@ fn main() {
             KeyBinding::new("ctrl-,", OpenSettings, None),
             KeyBinding::new("ctrl-r", Refresh, None),
         ]);
-        let options = chrome::remembered_window_options("barometer", "Barometer", size(px(1040.), px(860.)), cx);
+        let options = chrome::remembered_window_options(
+            "barometer",
+            "Barometer",
+            size(px(1040.), px(860.)),
+            cx,
+        );
         cx.open_window(options, |window, cx| {
             chrome::square_corners(window);
             chrome::remember_window("barometer", window, cx);

@@ -161,3 +161,9 @@ Release commits stay off `main`, so the workflow cannot create a push loop.
 Builds and tests must succeed before publication. Rerunning a workflow reuses
 its tag. Manual `vMAJOR.MINOR.PATCH` tags still work when they match the package
 version. Push feature branches normally; they do not publish releases.
+
+## New integration
+
+Open-Meteo air quality uses the same location as the weather station. It shows US AQI, PM2.5, PM10 and seasonal European pollen. Missing readings show Unavailable, rather than a false zero. Data attribution: Open-Meteo and CAMS ENSEMBLE / CAMS global.
+
+`--smoke` verifies this integration against the live service without opening a window.
