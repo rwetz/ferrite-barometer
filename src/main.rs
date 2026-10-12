@@ -581,9 +581,11 @@ impl Barometer {
                     )
             })
             .collect();
+        // The day lines sit beside the heatmap, or under it when narrow.
         div()
             .flex()
             .flex_row()
+            .flex_wrap()
             .gap_6()
             .items_start()
             .child(

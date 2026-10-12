@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The week's day lines wrap under the heatmap on narrow windows instead of overflowing.
+
 - Air quality and pollen readings from Open-Meteo, with explicit missing-data states.
 - Bounded requests on dedicated worker threads and live-service smoke checks.
 
