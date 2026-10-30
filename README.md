@@ -167,3 +167,12 @@ version. Push feature branches normally; they do not publish releases.
 Open-Meteo air quality uses the same location as the weather station. It shows US AQI, PM2.5, PM10 and seasonal European pollen. Missing readings show Unavailable, rather than a false zero. Data attribution: Open-Meteo and CAMS ENSEMBLE / CAMS global.
 
 `--smoke` verifies this integration against the live service without opening a window.
+
+---
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/heptagram-white.svg">
+    <img src="docs/brand/heptagram-black.svg" alt="heptagram" width="48">
+  </picture>
+</p>
